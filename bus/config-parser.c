@@ -38,6 +38,7 @@
 #include <dbus/dbus-test-tap.h>
 #include <string.h>
 #ifndef DBUS_WIN
+#include <glob.h>
 #include <sys/stat.h>
 #endif
 
@@ -2827,6 +2828,44 @@ bus_config_parser_content (BusConfigParser   *parser,
             _dbus_string_free (&full_path);
             goto nomem;
           }
+
+#ifndef DBUS_WIN
+        if (strpbrk (_dbus_string_get_const_data (&full_path), "*?[") != NULL)
+          {
+            glob_t gl;
+            int rc;
+
+            memset (&gl, 0, sizeof (gl));
+            rc = glob (_dbus_string_get_const_data (&full_path),
+                       GLOB_ONLYDIR | GLOB_NOESCAPE, NULL, &gl);
+            _dbus_string_free (&full_path);
+
+            if (rc == 0)
+              {
+                size_t j;
+
+                for (j = 0; j < gl.gl_pathc; j++)
+                  {
+                    DBusString matched_path;
+
+                    _dbus_string_init_const (&matched_path, gl.gl_pathv[j]);
+                    if (!include_dir (parser, &matched_path, error))
+                      {
+                        globfree (&gl);
+                        return FALSE;
+                      }
+                  }
+              }
+            else if (rc == GLOB_NOSPACE)
+              {
+                globfree (&gl);
+                goto nomem;
+              }
+
+            globfree (&gl);
+            break;
+          }
+#endif
         
         if (!include_dir (parser, &full_path, error))
           {
@@ -2919,6 +2958,60 @@ bus_config_parser_content (BusConfigParser   *parser,
             _dbus_string_free (&full_path);
             goto nomem;
           }
+
+#ifndef DBUS_WIN
+        if (strpbrk (_dbus_string_get_const_data (&full_path), "*?[") != NULL)
+          {
+            glob_t gl;
+            int rc;
+
+            memset (&gl, 0, sizeof (gl));
+            rc = glob (_dbus_string_get_const_data (&full_path),
+                       GLOB_ONLYDIR | GLOB_NOESCAPE, NULL, &gl);
+            _dbus_string_free (&full_path);
+
+            if (rc == 0)
+              {
+                size_t j;
+
+                for (j = 0; j < gl.gl_pathc; j++)
+                  {
+                    s = _dbus_strdup (gl.gl_pathv[j]);
+                    if (s == NULL)
+                      {
+                        globfree (&gl);
+                        goto nomem;
+                      }
+
+                    dir = bus_config_service_dir_new_take (s, BUS_SERVICE_DIR_FLAGS_NONE);
+                    if (dir == NULL)
+                      {
+                        dbus_free (s);
+                        globfree (&gl);
+                        goto nomem;
+                      }
+
+                    link = _dbus_list_alloc_link (dir);
+                    if (link == NULL)
+                      {
+                        bus_config_service_dir_free (dir);
+                        globfree (&gl);
+                        goto nomem;
+                      }
+
+                    service_dirs_append_link_unique_or_free (&parser->service_dirs, link);
+                  }
+              }
+            else if (rc == GLOB_NOSPACE)
+              {
+                globfree (&gl);
+                goto nomem;
+              }
+
+            globfree (&gl);
+            break;
+          }
+#endif
         
         if (!_dbus_string_copy_data (&full_path, &s))
           {
