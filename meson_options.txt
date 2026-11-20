@@ -305,3 +305,10 @@ option(
   value: false,
   description: 'use OutputDebugString() to log messages to Windows debug port'
 )
+
+option(
+  'vendor_pkg_prefix',
+  type: 'string',
+  value: '',
+  description: 'Wildcard package prefix (e.g. /sw) for late-bound vendor discovery'
+)

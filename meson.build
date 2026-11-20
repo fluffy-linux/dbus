@@ -229,6 +229,10 @@ if host_machine.endian() == 'big'
   config.set('WORDS_BIGENDIAN', 1)
 endif
 
+if get_option('vendor_pkg_prefix') != ''
+  config.set_quoted('VENDOR_PKG_PREFIX', get_option('vendor_pkg_prefix'))
+endif
+
 # Integer sizes
 int_types = [
     {

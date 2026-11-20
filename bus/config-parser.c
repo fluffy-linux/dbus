@@ -4171,6 +4171,17 @@ test_default_system_servicedirs (void)
   while ((link = _dbus_list_pop_first_link (&dirs)))
     {
       _dbus_test_diag ("    test service dir: %s", (char *)link->data);
+#ifdef VENDOR_PKG_PREFIX
+      if (i == 0 &&
+          strncmp ((char *) link->data, VENDOR_PKG_PREFIX "/",
+                   strlen (VENDOR_PKG_PREFIX "/")) == 0 &&
+          strcmp ((char *) link->data, test_system_service_dir_matches[0]) != 0)
+        {
+          dbus_free (link->data);
+          _dbus_list_free_link (link);
+          continue;
+        }
+#endif
       if (test_system_service_dir_matches[i] == NULL)
         {
           _dbus_test_diag ("more directories parsed than in match set");

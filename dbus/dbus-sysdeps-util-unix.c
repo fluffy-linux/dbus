@@ -1593,7 +1593,11 @@ _dbus_get_standard_session_servicedirs (DBusList **dirs)
     }
   else
     {
+#ifdef VENDOR_PKG_PREFIX
+      if (!_dbus_string_append (&servicedir_path, VENDOR_PKG_PREFIX "/*/share:/usr/local/share:/usr/share:"))
+#else
       if (!_dbus_string_append (&servicedir_path, "/usr/local/share:/usr/share:"))
+#endif
         goto oom;
     }
 
@@ -1651,6 +1655,9 @@ _dbus_get_standard_system_servicedirs (DBusList **dirs)
    * be available.
    */
   static const char standard_search_path[] =
+#ifdef VENDOR_PKG_PREFIX
+    VENDOR_PKG_PREFIX "/*/share:"
+#endif
     "/usr/local/share:"
     "/usr/share:"
     DBUS_DATADIR ":"
@@ -1682,7 +1689,12 @@ _dbus_get_local_system_servicedirs (DBusList **dirs)
 {
   static const char standard_search_path[] =
     "/etc:"
+#ifdef VENDOR_PKG_PREFIX
+    "/run:"
+    VENDOR_PKG_PREFIX "/*/etc";
+#else
     "/run";
+#endif
   DBusString servicedir_path;
 
   _dbus_string_init_const (&servicedir_path, standard_search_path);
