@@ -53,6 +53,7 @@
 #include <grp.h>
 #include <sys/socket.h>
 #include <dirent.h>
+#include <glob.h>
 #include <sys/un.h>
 
 #ifdef HAVE_SYS_PRCTL_H
@@ -1256,6 +1257,191 @@ ensure_owned_directory (const char *label,
 #define DBUS_UNIX_STANDARD_SESSION_SERVICEDIR "/dbus-1/services"
 #define DBUS_UNIX_STANDARD_SYSTEM_SERVICEDIR "/dbus-1/system-services"
 
+static int
+dbus_scan_bracket_end (const char *s,
+                       int         pos,
+                       int         len)
+{
+  int p = pos + 1;
+
+  if (p < len && (s[p] == '!' || s[p] == '^'))
+    p++;
+  if (p < len && s[p] == ']')
+    p++;
+
+  while (p < len && s[p] != '/')
+    {
+      if (s[p] == ']')
+        return p;
+
+      if (s[p] == '[' && (p + 1) < len &&
+          (s[p + 1] == ':' || s[p + 1] == '.' || s[p + 1] == '='))
+        {
+          char ctype = s[p + 1];
+          int q = p + 2;
+
+          while (q < len && s[q] != '/' && (ctype == '.' || s[q] != ']'))
+            {
+              if (s[q] == ctype && (q + 1) < len && s[q + 1] == ']')
+                {
+                  p = q + 2;
+                  goto next_char;
+                }
+              q++;
+            }
+        }
+
+      p++;
+    next_char:;
+    }
+
+  return -1;
+}
+
+static int
+dbus_find_next_colon (const char *s,
+                      int         start,
+                      int         len)
+{
+  int i = start;
+
+  while (i < len)
+    {
+      if (s[i] == ':')
+        return i;
+
+      if (s[i] == '[')
+        {
+          int end = dbus_scan_bracket_end (s, i, len);
+
+          if (end >= 0)
+            {
+              i = end + 1;
+              continue;
+            }
+        }
+
+      i++;
+    }
+
+  return len;
+}
+
+static dbus_bool_t
+_dbus_split_glob_paths_and_append (DBusString *dirs,
+                                   const char *suffix,
+                                   DBusList  **dir_list)
+{
+  const char *raw;
+  int total_len;
+  int start;
+  DBusString file_suffix;
+
+  _dbus_string_init_const (&file_suffix, suffix);
+  raw = _dbus_string_get_const_data (dirs);
+  total_len = _dbus_string_get_length (dirs);
+  start = 0;
+
+  while (start <= total_len)
+    {
+      int end = dbus_find_next_colon (raw, start, total_len);
+      int seg_len = end - start;
+
+      if (seg_len > 0)
+        {
+          DBusString path;
+
+          if (!_dbus_string_init (&path))
+            goto oom;
+
+          if (!_dbus_string_copy_len (dirs, start, seg_len, &path, 0))
+            {
+              _dbus_string_free (&path);
+              goto oom;
+            }
+
+          _dbus_string_chop_white (&path);
+
+          if (_dbus_string_get_length (&path) > 0)
+            {
+              const char *cpath;
+
+              if (!_dbus_concat_dir_and_file (&path, &file_suffix))
+                {
+                  _dbus_string_free (&path);
+                  goto oom;
+                }
+
+              cpath = _dbus_string_get_const_data (&path);
+              if (strpbrk (cpath, "*?[") != NULL)
+                {
+                  glob_t gl;
+                  int rc;
+
+                  memset (&gl, 0, sizeof (gl));
+                  rc = glob (cpath, GLOB_ONLYDIR | GLOB_NOESCAPE, NULL, &gl);
+                  _dbus_string_free (&path);
+
+                  if (rc == 0)
+                    {
+                      size_t j;
+
+                      for (j = 0; j < gl.gl_pathc; j++)
+                        {
+                          char *matched = _dbus_strdup (gl.gl_pathv[j]);
+
+                          if (matched == NULL || !_dbus_list_append (dir_list, matched))
+                            {
+                              dbus_free (matched);
+                              globfree (&gl);
+                              goto oom;
+                            }
+                        }
+                    }
+                  else if (rc == GLOB_NOSPACE)
+                    {
+                      globfree (&gl);
+                      goto oom;
+                    }
+
+                  globfree (&gl);
+                }
+              else
+                {
+                  char *owned = NULL;
+
+                  if (!_dbus_string_copy_data (&path, &owned))
+                    {
+                      _dbus_string_free (&path);
+                      goto oom;
+                    }
+                  _dbus_string_free (&path);
+
+                  if (!_dbus_list_append (dir_list, owned))
+                    {
+                      dbus_free (owned);
+                      goto oom;
+                    }
+                }
+            }
+          else
+            {
+              _dbus_string_free (&path);
+            }
+        }
+
+      if (end == total_len)
+        break;
+      start = end + 1;
+    }
+
+  return TRUE;
+
+oom:
+  _dbus_list_clear_full (dir_list, dbus_free);
+  return FALSE;
+}
+
 /**
  * Returns the standard directories for a session bus to look for
  * transient service activation files.
@@ -1420,9 +1606,9 @@ _dbus_get_standard_session_servicedirs (DBusList **dirs)
   if (!_dbus_string_append (&servicedir_path, DBUS_DATADIR))
     goto oom;
 
-  if (!_dbus_split_paths_and_append (&servicedir_path,
-                                     DBUS_UNIX_STANDARD_SESSION_SERVICEDIR,
-                                     dirs))
+  if (!_dbus_split_glob_paths_and_append (&servicedir_path,
+                                          DBUS_UNIX_STANDARD_SESSION_SERVICEDIR,
+                                          dirs))
     goto oom;
 
   _dbus_string_free (&servicedir_path);
@@ -1473,9 +1659,9 @@ _dbus_get_standard_system_servicedirs (DBusList **dirs)
 
   _dbus_string_init_const (&servicedir_path, standard_search_path);
 
-  return _dbus_split_paths_and_append (&servicedir_path,
-                                       DBUS_UNIX_STANDARD_SYSTEM_SERVICEDIR,
-                                       dirs);
+  return _dbus_split_glob_paths_and_append (&servicedir_path,
+                                            DBUS_UNIX_STANDARD_SYSTEM_SERVICEDIR,
+                                            dirs);
 }
 
 
@@ -1501,9 +1687,9 @@ _dbus_get_local_system_servicedirs (DBusList **dirs)
 
   _dbus_string_init_const (&servicedir_path, standard_search_path);
 
-  return _dbus_split_paths_and_append (&servicedir_path,
-                                       DBUS_UNIX_STANDARD_SYSTEM_SERVICEDIR,
-                                       dirs);
+  return _dbus_split_glob_paths_and_append (&servicedir_path,
+                                            DBUS_UNIX_STANDARD_SYSTEM_SERVICEDIR,
+                                            dirs);
 }
 
 /**
