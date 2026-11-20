@@ -37,6 +37,9 @@
 #include <dbus/dbus-sysdeps.h>
 #include <dbus/dbus-test-tap.h>
 #include <string.h>
+#ifndef DBUS_WIN
+#include <sys/stat.h>
+#endif
 
 typedef enum
 {
@@ -266,8 +269,17 @@ service_dirs_find_dir (DBusList **service_dirs,
                        const char *dir)
 {
   DBusList *link;
+#ifndef DBUS_WIN
+  struct stat st_dir;
+  dbus_bool_t have_st_dir = FALSE;
+#endif
 
   _dbus_assert (dir != NULL);
+
+#ifndef DBUS_WIN
+  if (*service_dirs != NULL && stat (dir, &st_dir) == 0)
+    have_st_dir = TRUE;
+#endif
 
   for (link = *service_dirs; link; link = _dbus_list_get_next_link(service_dirs, link))
     {
@@ -275,6 +287,18 @@ service_dirs_find_dir (DBusList **service_dirs,
 
       if (strcmp (dir, link_dir->path) == 0)
         return link_dir;
+
+#ifndef DBUS_WIN
+      if (have_st_dir)
+        {
+          struct stat st_link;
+
+          if (stat (link_dir->path, &st_link) == 0 &&
+              st_dir.st_dev == st_link.st_dev &&
+              st_dir.st_ino == st_link.st_ino)
+            return link_dir;
+        }
+#endif
     }
 
   return NULL;
@@ -346,6 +370,63 @@ service_dirs_absorb_string_list (DBusList           **service_dirs,
   return TRUE;
 }
 
+static const char *
+conf_dirs_find_dir (DBusList  **conf_dirs,
+                    const char *dir)
+{
+  DBusList *link;
+#ifndef DBUS_WIN
+  struct stat st_dir;
+  dbus_bool_t have_st_dir = FALSE;
+#endif
+
+  _dbus_assert (dir != NULL);
+
+#ifndef DBUS_WIN
+  if (*conf_dirs != NULL && stat (dir, &st_dir) == 0)
+    have_st_dir = TRUE;
+#endif
+
+  for (link = *conf_dirs; link; link = _dbus_list_get_next_link (conf_dirs, link))
+    {
+      const char *link_dir = link->data;
+
+      if (strcmp (dir, link_dir) == 0)
+        return link_dir;
+
+#ifndef DBUS_WIN
+      if (have_st_dir)
+        {
+          struct stat st_link;
+
+          if (stat (link_dir, &st_link) == 0 &&
+              st_dir.st_dev == st_link.st_dev &&
+              st_dir.st_ino == st_link.st_ino)
+            return link_dir;
+        }
+#endif
+    }
+
+  return NULL;
+}
+
+static void
+conf_dirs_append_link_unique_or_free (DBusList **conf_dirs,
+                                      DBusList  *dir_link)
+{
+  const char *dir = dir_link->data;
+
+  if (conf_dirs_find_dir (conf_dirs, dir) == NULL)
+    {
+      _dbus_list_append_link (conf_dirs, dir_link);
+    }
+  else
+    {
+      dbus_free (dir_link->data);
+      _dbus_list_free_link (dir_link);
+    }
+}
+
 static dbus_bool_t
 merge_included (BusConfigParser *parser,
                 BusConfigParser *included,
@@ -414,7 +495,7 @@ merge_included (BusConfigParser *parser,
     service_dirs_append_link_unique_or_free (&parser->service_dirs, link);
 
   while ((link = _dbus_list_pop_first_link (&included->conf_dirs)))
-    _dbus_list_append_link (&parser->conf_dirs, link);
+    conf_dirs_append_link_unique_or_free (&parser->conf_dirs, link);
   
   return TRUE;
 }
@@ -2487,6 +2568,10 @@ include_dir (BusConfigParser   *parser,
   DBusDirIter *dir;
   char *s;
   
+  if (conf_dirs_find_dir (&parser->conf_dirs,
+                          _dbus_string_get_const_data (dirname)) != NULL)
+    return TRUE;
+
   if (!_dbus_string_init (&filename))
     {
       BUS_SET_OOM (error);
