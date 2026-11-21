@@ -413,6 +413,20 @@ tests += [
         'srcs': [ 'internals/printf.c' ],
         'link': [ libdbus_testutils, ],
     },
+]
+
+if message_bus and platform_unix
+    tests += [
+        {
+            'name': 'fluffy-config',
+            'srcs': [ 'internals/fluffy-config.c' ],
+            'link': [ libdbus_testutils, libdbus_daemon_internal, ],
+            'install': false,
+        },
+    ]
+endif
+
+tests += [
     {
         'name': 'manual-backtrace',
         'srcs': [ 'manual-backtrace.c' ],
